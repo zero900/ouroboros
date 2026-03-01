@@ -179,11 +179,11 @@ def handle_chat_direct(chat_id: int, text: str, image_data: Optional[Union[Tuple
 # ---------------------------------------------------------------------------
 
 def auto_resume_after_restart() -> None:
-    """If recent restart left open work, auto-resume without waiting for owner message.
+    """After restart, send a simple notification instead of running a full LLM task.
 
-    Checks: scratchpad content, recent restart events, pending_restart_verify.
-    Background consciousness will subsume this eventually, but auto-resume is
-    needed immediately after a restart so the agent doesn't go silent.
+    The old approach spawned a full agent task to "read scratchpad and resume work",
+    which cost ~$0.75 per restart. Now we just send a short ping — the user or
+    background consciousness will trigger real work when needed.
     """
     try:
         st = load_state()
@@ -215,44 +215,21 @@ def auto_resume_after_restart() -> None:
         if not recent_restart:
             return
 
-        # Check if scratchpad has meaningful content
-        scratchpad_path = DRIVE_ROOT / "memory" / "scratchpad.md"
-        if not scratchpad_path.exists():
-            return
-
-        scratchpad = scratchpad_path.read_text(encoding="utf-8")
-        # Skip if scratchpad is empty or default
-        stripped = scratchpad.strip()
-        if not stripped or stripped == "# Scratchpad" or "(empty" in stripped.lower():
-            # Check if it's just the default template with all empty sections
-            content_lines = [
-                ln.strip() for ln in stripped.splitlines()
-                if ln.strip() and not ln.strip().startswith("#") and ln.strip() != "- (empty)"
-            ]
-            # Filter out UpdatedAt lines
-            content_lines = [ln for ln in content_lines if not ln.startswith("UpdatedAt:")]
-            if not content_lines:
-                return
-
-        # Auto-resume: inject synthetic message
+        # Just send a lightweight notification — no LLM task needed
         time.sleep(2)  # Let everything initialize
-        agent = _get_chat_agent()
-        if not agent._busy:
-            import threading
-            threading.Thread(
-                target=handle_chat_direct,
-                args=(int(chat_id),
-                      "[auto-resume after restart] Continue your work. Read scratchpad and identity — they contain context of what you were doing.",
-                      None),
-                daemon=True,
-            ).start()
-            append_jsonl(
-                DRIVE_ROOT / "logs" / "supervisor.jsonl",
-                {
-                    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                    "type": "auto_resume_triggered",
-                },
-            )
+        try:
+            send_with_budget(int(chat_id), "♻️ Перезапустился. Готов к работе.")
+        except Exception as e:
+            log.warning(f"auto_resume: failed to send notification: {e}")
+
+        append_jsonl(
+            DRIVE_ROOT / "logs" / "supervisor.jsonl",
+            {
+                "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "type": "auto_resume_triggered",
+                "mode": "lightweight_notification",
+            },
+        )
     except Exception as e:
         append_jsonl(DRIVE_ROOT / "logs" / "supervisor.jsonl", {
             "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),

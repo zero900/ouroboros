@@ -110,7 +110,6 @@ def _send_owner_message(ctx: ToolContext, text: str, reason: str = "") -> str:
         return "⚠️ No active chat — cannot send proactive message."
     if not text or not text.strip():
         return "⚠️ Empty message."
-
     from ouroboros.utils import append_jsonl
     ctx.pending_events.append({
         "type": "send_message",
