@@ -100,11 +100,8 @@ def _build_runtime_section(env: Any, task: Dict[str, Any]) -> str:
 
 
 def _build_memory_sections(memory: Memory) -> List[str]:
-    """Build scratchpad, identity, user context, dialogue summary sections."""
+    """Build identity, user context, dialogue summary sections."""
     sections = []
-
-    scratchpad_raw = memory.load_scratchpad()
-    sections.append("## Scratchpad\n\n" + clip_text(scratchpad_raw, 90000))
 
     identity_raw = memory.load_identity()
     sections.append("## Identity\n\n" + clip_text(identity_raw, 80000))
@@ -360,7 +357,9 @@ def build_llm_messages(
     semi_stable_text = "\n\n".join(semi_stable_parts)
 
     # Dynamic content: changes every round
+    scratchpad_raw = memory.load_scratchpad()
     dynamic_parts = [
+        "## Scratchpad\n\n" + clip_text(scratchpad_raw, 90000),
         "## Drive state\n\n" + clip_text(state_json, 90000),
         _build_runtime_section(env, task),
     ]
