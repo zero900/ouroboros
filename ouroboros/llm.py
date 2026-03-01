@@ -278,7 +278,11 @@ class LLMClient:
         return os.environ.get("OUROBOROS_MODEL", "anthropic/claude-sonnet-4.6")
 
     def available_models(self) -> List[str]:
-        """Return list of available models from env (for switch_model tool schema)."""
+        """Return list of available models. Fetches live list from OpenRouter, falls back to env vars."""
+        pricing = fetch_openrouter_pricing()
+        if pricing:
+            return list(pricing.keys())
+        # Fallback: read a few models from environment variables
         main = os.environ.get("OUROBOROS_MODEL", "anthropic/claude-sonnet-4.6")
         code = os.environ.get("OUROBOROS_MODEL_CODE", "")
         light = os.environ.get("OUROBOROS_MODEL_LIGHT", "")
