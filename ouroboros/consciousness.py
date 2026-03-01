@@ -35,6 +35,14 @@ from ouroboros.llm import LLMClient, DEFAULT_LIGHT_MODEL
 
 log = logging.getLogger(__name__)
 
+# Ordered list of free models to try (in priority order)
+FREE_MODEL_FALLBACKS = [
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemini-2.0-flash-exp:free",
+    "deepseek/deepseek-chat:free",
+    "qwen/qwen3-8b:free",
+]
+
 
 class BackgroundConsciousness:
     """Persistent background thinking loop for Ouroboros."""
@@ -81,6 +89,11 @@ class BackgroundConsciousness:
     @property
     def _model(self) -> str:
         return os.environ.get("OUROBOROS_MODEL_LIGHT", "") or DEFAULT_LIGHT_MODEL
+
+    def _get_model_with_fallbacks(self) -> List[str]:
+        """Return ordered list of models to try: configured model first, then free fallbacks."""
+        primary = self._model
+        return [primary] + [m for m in FREE_MODEL_FALLBACKS if m != primary]
 
     def start(self) -> str:
         if self.is_running:
@@ -181,7 +194,7 @@ class BackgroundConsciousness:
         """One thinking cycle: build context, call LLM, execute tools iteratively."""
         self._maybe_schedule_arch_review()
         context = self._build_context()
-        model = self._model
+        current_model = self._model
 
         tools = self._tool_schemas()
         messages = [
@@ -198,13 +211,47 @@ class BackgroundConsciousness:
             for round_idx in range(1, self._MAX_BG_ROUNDS + 1):
                 if self._paused:
                     break
-                msg, usage = self._llm.chat(
-                    messages=messages,
-                    model=model,
-                    tools=tools,
-                    reasoning_effort="low",
-                    max_tokens=2048,
-                )
+
+                # Build per-round model list: current_model first, then remaining fallbacks
+                all_models = self._get_model_with_fallbacks()
+                models_to_try = [current_model] + [m for m in all_models if m != current_model]
+                last_exc: Optional[Exception] = None
+                msg, usage = None, None
+                for try_model in models_to_try:
+                    try:
+                        msg, usage = self._llm.chat(
+                            messages=messages,
+                            model=try_model,
+                            tools=tools,
+                            reasoning_effort="low",
+                            max_tokens=2048,
+                        )
+                        if try_model != current_model:
+                            append_jsonl(self._drive_root / "logs" / "events.jsonl", {
+                                "ts": utc_now_iso(),
+                                "type": "consciousness_model_fallback",
+                                "failed_model": current_model,
+                                "succeeded_model": try_model,
+                                "round": round_idx,
+                            })
+                        current_model = try_model
+                        last_exc = None
+                        break
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if "429" in str(e) or "rate limit" in err_str or "rate_limit" in err_str:
+                            append_jsonl(self._drive_root / "logs" / "events.jsonl", {
+                                "ts": utc_now_iso(),
+                                "type": "consciousness_rate_limit",
+                                "model": try_model,
+                                "round": round_idx,
+                                "error": repr(e),
+                            })
+                            last_exc = e
+                            continue
+                        raise
+                if last_exc is not None:
+                    raise last_exc
                 cost = float(usage.get("cost") or 0)
                 total_cost += cost
                 self._bg_spent_usd += cost
@@ -282,7 +329,7 @@ class BackgroundConsciousness:
                 "thought_preview": (final_content or "")[:300],
                 "cost_usd": total_cost,
                 "rounds": round_idx,
-                "model": model,
+                "model": current_model,
             })
 
         except Exception as e:
